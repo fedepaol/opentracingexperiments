@@ -1,0 +1,20 @@
+version: "3"
+
+services:
+  producer:
+    build: ./producer
+    command: /app/wait-for-it.sh nats:4223 -- /app/main -nats nats:4223 -cluster test-cluster
+    depends_on:
+      - nats
+  consumer:
+    build: ./consumer
+  nats:
+    image: nats-streaming
+    command: -p 4223 -m 8223 -D
+    ports: 
+      - 8223:8223
+    healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:4223"]
+        interval: 30s
+        timeout: 10s
+        retries: 5
