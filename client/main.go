@@ -90,12 +90,12 @@ func consumer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Sign
 func main() {
 	natsURL := flag.String("nats", "", "the url of the nats streaming server")
 	natsCluster := flag.String("cluster", "", "the id of the nats cluster we are connecting to")
-	producer := flag.Bool("producer", false, "tells if the client starts with producer mode")
+	isProducer := flag.Bool("producer", false, "tells if the client starts with producer mode")
 
 	flag.Parse()
 
 	var name string
-	if *producer {
+	if *isProducer {
 		name = "producer"
 	} else {
 		name = "consumer"
@@ -118,10 +118,10 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt)
 
 	// Produce / consume are blocking until a sigint is received
-	if *producer {
-		produce(tracer, sc, signalChan)
+	if *isProducer {
+		producer(tracer, sc, signalChan)
 	} else {
-		consume(tracer, sc, signalChan)
+		consumer(tracer, sc, signalChan)
 	}
 }
 
