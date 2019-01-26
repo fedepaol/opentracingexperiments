@@ -19,7 +19,7 @@ services:
       - jaeger
   nats:
     image: nats-streaming
-    command: -p 4223 -m 8223 -D
+    command: -p 4223 -m 8223 -D -store file -dir /tmp --file_sync=false
     ports: 
       - 8223:8223
   jaeger:

@@ -63,20 +63,22 @@ func sendEvent(tracer opentracing.Tracer, sc stan.Conn, event int) {
 		Payload: strconv.Itoa(event),
 		Carrier: make(opentracing.TextMapCarrier),
 	}
+
 	span := tracer.StartSpan("SendEvent")
+	span.SetTag("EventID", event)
 	ext.SpanKindRPCClient.Set(span)
 	span.Tracer().Inject(span.Context(), opentracing.TextMap, m.Carrier)
 
-	defer span.Finish()
 	toSend, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
+	span.Finish()
 	sc.Publish("foo", toSend)
 }
 
 func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
@@ -105,9 +107,11 @@ func consume(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signa
 		ctx, _ := tracer.Extract(opentracing.TextMap, msg.Carrier)
 
 		span := tracer.StartSpan("Receiving", ext.RPCServerOption(ctx))
+		span.SetTag("EventID", msg.Payload)
+
 		<-time.After(500 * time.Microsecond)
 		span.Finish()
-		fmt.Printf("Received a message: %s\n", string(m.Data))
+		fmt.Printf("Received a message: %s\n", msg.Payload)
 
 	})
 
