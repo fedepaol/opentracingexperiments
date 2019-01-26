@@ -24,41 +24,7 @@ type Message struct {
 	Payload string                     `json:"message"`
 }
 
-func main() {
-	natsURL := flag.String("nats", "", "the url of the nats streaming server")
-	natsCluster := flag.String("cluster", "", "the id of the nats cluster we are connecting to")
-	producer := flag.Bool("producer", false, "tells if the client starts with producer mode")
-
-	flag.Parse()
-
-	var name string
-	if *producer {
-		name = "producer"
-	} else {
-		name = "consumer"
-	}
-
-	sc, err := stan.Connect(*natsCluster, name, stan.NatsURL(*natsURL))
-	if err != nil {
-		log.Fatalf("Failed to connect %v", err)
-	}
-	defer sc.Close()
-
-	signalChan := make(chan os.Signal, 0)
-	signal.Notify(signalChan, os.Interrupt)
-
-	tracer, closer := initJaeger(name)
-	opentracing.SetGlobalTracer(tracer)
-
-	if *producer {
-		produce(tracer, sc, signalChan)
-	} else {
-		consume(tracer, sc, signalChan)
-	}
-	closer.Close()
-}
-
-func sendEvent(tracer opentracing.Tracer, sc stan.Conn, event int) {
+func produce(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	m := Message{
 		Payload: strconv.Itoa(event),
 		Carrier: make(opentracing.TextMapCarrier),
@@ -77,7 +43,17 @@ func sendEvent(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	sc.Publish("foo", toSend)
 }
 
-func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
+func consume(tracer opentracing.Tracer, msg Message) {
+	ctx, _ := tracer.Extract(opentracing.TextMap, msg.Carrier)
+	span := tracer.StartSpan("Receiving", ext.RPCServerOption(ctx))
+	span.SetTag("EventID", msg.Payload)
+
+	<-time.After(500 * time.Microsecond)
+	span.Finish()
+	fmt.Printf("Received a message: %s\n", msg.Payload)
+}
+
+func producer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
 	ticker := time.NewTicker(3 * time.Second)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -87,7 +63,7 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signa
 		for {
 			select {
 			case <-ticker.C:
-				sendEvent(tracer, sc, count)
+				produce(tracer, sc, count)
 				count++
 			case <-signalChan:
 				wg.Done()
@@ -98,25 +74,55 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signa
 	wg.Wait()
 }
 
-func consume(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
+func consumer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
 	sub, _ := sc.Subscribe("foo", func(m *stan.Msg) {
 		var msg Message
 		if err := json.Unmarshal(m.Data, &msg); err != nil {
 			fmt.Printf("Error in unmarshaling message")
 		}
-		ctx, _ := tracer.Extract(opentracing.TextMap, msg.Carrier)
-
-		span := tracer.StartSpan("Receiving", ext.RPCServerOption(ctx))
-		span.SetTag("EventID", msg.Payload)
-
-		<-time.After(500 * time.Microsecond)
-		span.Finish()
-		fmt.Printf("Received a message: %s\n", msg.Payload)
-
+		consume(tracer, msg)
 	})
 
 	<-signalChan
 	sub.Close()
+}
+
+func main() {
+	natsURL := flag.String("nats", "", "the url of the nats streaming server")
+	natsCluster := flag.String("cluster", "", "the id of the nats cluster we are connecting to")
+	producer := flag.Bool("producer", false, "tells if the client starts with producer mode")
+
+	flag.Parse()
+
+	var name string
+	if *producer {
+		name = "producer"
+	} else {
+		name = "consumer"
+	}
+
+	// Setting up nats streaming connection
+	sc, err := stan.Connect(*natsCluster, name, stan.NatsURL(*natsURL))
+	if err != nil {
+		log.Fatalf("Failed to connect %v", err)
+	}
+	defer sc.Close()
+
+	// Setting up Jaeger as tracing collector
+	tracer, closer := initJaeger(name)
+	opentracing.SetGlobalTracer(tracer)
+	defer closer.Close()
+
+	// Signal chan to get interrupted
+	signalChan := make(chan os.Signal, 0)
+	signal.Notify(signalChan, os.Interrupt)
+
+	// Produce / consume are blocking until a sigint is received
+	if *producer {
+		produce(tracer, sc, signalChan)
+	} else {
+		consume(tracer, sc, signalChan)
+	}
 }
 
 // initJaeger returns an instance of Jaeger Tracer that samples 100% of traces and logs all spans to stdout.
