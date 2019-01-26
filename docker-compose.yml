@@ -4,20 +4,34 @@ services:
   producer:
     build: ./client
     command: /app/wait-for-it.sh nats:4223 -- /app/natsclient -nats nats:4223 -cluster test-cluster -producer
+    environment:
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
       - nats
+      - jaeger
   consumer:
     build: ./client
     command: /app/wait-for-it.sh nats:4223 -- /app/natsclient -nats nats:4223 -cluster test-cluster
+    environment:
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
       - producer
+      - jaeger
   nats:
     image: nats-streaming
     command: -p 4223 -m 8223 -D
     ports: 
       - 8223:8223
-    healthcheck:
-        test: ["CMD", "curl", "-f", "http://localhost:4223"]
-        interval: 30s
-        timeout: 10s
-        retries: 5
+  jaeger:
+    image: jaegertracing/all-in-one:1.8
+    ports:
+      - 5775:5775/udp
+      - 6831:6831/udp
+      - 6832:6832/udp
+      - 5778:5778
+      - 16686:16686
+      - 14268:14268
+      - 9411:9411
+    environment:
+      - COLLECTOR_ZIPKIN_HTTP_PORT=9411
+  

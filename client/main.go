@@ -14,9 +14,9 @@ import (
 
 	stan "github.com/nats-io/go-nats-streaming"
 	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go/ext"
 	jaeger "github.com/uber/jaeger-client-go"
 	config "github.com/uber/jaeger-client-go/config"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 type Message struct {
@@ -38,7 +38,6 @@ func main() {
 		name = "consumer"
 	}
 
-	log.Println("Name ", name)
 	sc, err := stan.Connect(*natsCluster, name, stan.NatsURL(*natsURL))
 	if err != nil {
 		log.Fatalf("Failed to connect %v", err)
@@ -49,20 +48,25 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt)
 
 	tracer, closer := initJaeger(name)
+	opentracing.SetGlobalTracer(tracer)
 
 	if *producer {
 		produce(tracer, sc, signalChan)
 	} else {
-		consume(sc, signalChan)
+		consume(tracer, sc, signalChan)
 	}
+	closer.Close()
 }
 
 func sendEvent(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	m := Message{
-		Payload: strconv.Itoa(count),
+		Payload: strconv.Itoa(event),
+		Carrier: make(opentracing.TextMapCarrier),
 	}
-	span := tracer.StartSpan("sending")
+	span := tracer.StartSpan("SendEvent")
+	ext.SpanKindRPCClient.Set(span)
 	span.Tracer().Inject(span.Context(), opentracing.TextMap, m.Carrier)
+
 	defer span.Finish()
 	toSend, err := json.Marshal(m)
 	if err != nil {
@@ -92,15 +96,19 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signa
 	wg.Wait()
 }
 
-func consume(sc stan.Conn, signalChan <-chan os.Signal) {
+func consume(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
 	sub, _ := sc.Subscribe("foo", func(m *stan.Msg) {
 		var msg Message
 		if err := json.Unmarshal(m.Data, &msg); err != nil {
 			fmt.Printf("Error in unmarshaling message")
 		}
-		span := tracer.StartSpan("Receiving")
-		span
+		ctx, _ := tracer.Extract(opentracing.TextMap, msg.Carrier)
+
+		span := tracer.StartSpan("Receiving", ext.RPCServerOption(ctx))
+		<-time.After(500 * time.Microsecond)
+		span.Finish()
 		fmt.Printf("Received a message: %s\n", string(m.Data))
+
 	})
 
 	<-signalChan
@@ -111,11 +119,12 @@ func consume(sc stan.Conn, signalChan <-chan os.Signal) {
 func initJaeger(service string) (opentracing.Tracer, io.Closer) {
 	cfg := &config.Configuration{
 		Sampler: &config.SamplerConfig{
-			Type:  "const",
+			Type:  jaeger.SamplerTypeConst,
 			Param: 1,
 		},
 		Reporter: &config.ReporterConfig{
-			LogSpans: true,
+			LogSpans:          true,
+			CollectorEndpoint: "http://jaeger:14268/api/traces",
 		},
 	}
 	tracer, closer, err := cfg.New(service, config.Logger(jaeger.StdLogger))
