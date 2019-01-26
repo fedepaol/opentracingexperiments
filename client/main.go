@@ -1,21 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"time"
 
 	stan "github.com/nats-io/go-nats-streaming"
+	opentracing "github.com/opentracing/opentracing-go"
+	jaeger "github.com/uber/jaeger-client-go"
+	config "github.com/uber/jaeger-client-go/config"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
+
+type Message struct {
+	Carrier opentracing.TextMapCarrier `json:"carrier"`
+	Payload string                     `json:"message"`
+}
 
 func main() {
 	natsURL := flag.String("nats", "", "the url of the nats streaming server")
 	natsCluster := flag.String("cluster", "", "the id of the nats cluster we are connecting to")
-	producer := flag.Bool("producer", true, "tells if the client starts with producer mode")
+	producer := flag.Bool("producer", false, "tells if the client starts with producer mode")
 
 	flag.Parse()
 
@@ -25,6 +37,8 @@ func main() {
 	} else {
 		name = "consumer"
 	}
+
+	log.Println("Name ", name)
 	sc, err := stan.Connect(*natsCluster, name, stan.NatsURL(*natsURL))
 	if err != nil {
 		log.Fatalf("Failed to connect %v", err)
@@ -34,38 +48,79 @@ func main() {
 	signalChan := make(chan os.Signal, 0)
 	signal.Notify(signalChan, os.Interrupt)
 
+	tracer, closer := initJaeger(name)
+
 	if *producer {
-		produce(sc, signalChan)
+		produce(tracer, sc, signalChan)
 	} else {
 		consume(sc, signalChan)
 	}
 }
 
-func produce(sc stan.Conn, signalChan <-chan os.Signal) {
+func sendEvent(tracer opentracing.Tracer, sc stan.Conn, event int) {
+	m := Message{
+		Payload: strconv.Itoa(count),
+	}
+	span := tracer.StartSpan("sending")
+	span.Tracer().Inject(span.Context(), opentracing.TextMap, m.Carrier)
+	defer span.Finish()
+	toSend, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	sc.Publish("foo", toSend)
+}
+
+func produce(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
 	ticker := time.NewTicker(time.Second)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
+
 	go func() {
+		count := 0
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Println("publishing")
-				sc.Publish("foo", []byte("Hello World"))
+				sendEvent(tracer, sc, count)
+				count++
 			case <-signalChan:
 				wg.Done()
 				return
 			}
 		}
-
 	}()
 	wg.Wait()
 }
 
 func consume(sc stan.Conn, signalChan <-chan os.Signal) {
 	sub, _ := sc.Subscribe("foo", func(m *stan.Msg) {
+		var msg Message
+		if err := json.Unmarshal(m.Data, &msg); err != nil {
+			fmt.Printf("Error in unmarshaling message")
+		}
+		span := tracer.StartSpan("Receiving")
+		span
 		fmt.Printf("Received a message: %s\n", string(m.Data))
 	})
 
 	<-signalChan
 	sub.Close()
+}
+
+// initJaeger returns an instance of Jaeger Tracer that samples 100% of traces and logs all spans to stdout.
+func initJaeger(service string) (opentracing.Tracer, io.Closer) {
+	cfg := &config.Configuration{
+		Sampler: &config.SamplerConfig{
+			Type:  "const",
+			Param: 1,
+		},
+		Reporter: &config.ReporterConfig{
+			LogSpans: true,
+		},
+	}
+	tracer, closer, err := cfg.New(service, config.Logger(jaeger.StdLogger))
+	if err != nil {
+		panic(fmt.Sprintf("ERROR: cannot init Jaeger: %v\n", err))
+	}
+	return tracer, closer
 }
