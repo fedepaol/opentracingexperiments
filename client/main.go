@@ -39,8 +39,10 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	if err != nil {
 		return
 	}
+	sc.PublishAsync("foo", toSend, func(ackedNuid string, err error) {
+
+	})
 	span.Finish()
-	sc.Publish("foo", toSend)
 }
 
 func consume(tracer opentracing.Tracer, msg Message) {
