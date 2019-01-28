@@ -93,13 +93,18 @@ func main() {
 	natsURL := flag.String("nats", "", "the url of the nats streaming server")
 	natsCluster := flag.String("cluster", "", "the id of the nats cluster we are connecting to")
 	isProducer := flag.Bool("producer", false, "tells if the client starts with producer mode")
+	clientName := flag.String("clientname", "", "Overrides the nats client name")
 
 	flag.Parse()
 
 	var name string
-	if *isProducer {
+
+	switch {
+	case *clientName != "":
+		name = *clientName
+	case *isProducer:
 		name = "producer"
-	} else {
+	default:
 		name = "consumer"
 	}
 

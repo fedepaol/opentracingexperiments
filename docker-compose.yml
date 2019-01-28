@@ -17,6 +17,14 @@ services:
     depends_on:
       - producer
       - jaeger
+  aaaconsumer:
+    build: ./client
+    command: /app/wait-for-it.sh nats:4223 -- /app/natsclient -nats nats:4223 -cluster test-cluster -clientname consumer1
+    environment:
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    depends_on:
+      - producer
+      - jaeger    
   nats:
     image: nats-streaming
     command: -p 4223 -m 8223 -D -store file -dir /tmp --file_sync=false
