@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -31,6 +32,8 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	}
 
 	span := tracer.StartSpan("SendEvent")
+	defer span.Finish()
+
 	span.SetTag("EventID", event)
 	ext.SpanKindRPCClient.Set(span)
 	span.Tracer().Inject(span.Context(), opentracing.TextMap, m.Carrier)
@@ -42,17 +45,25 @@ func produce(tracer opentracing.Tracer, sc stan.Conn, event int) {
 	sc.PublishAsync("foo", toSend, func(ackedNuid string, err error) {
 
 	})
-	span.Finish()
 }
 
 func consume(tracer opentracing.Tracer, msg Message) {
 	ctx, _ := tracer.Extract(opentracing.TextMap, msg.Carrier)
 	span := tracer.StartSpan("Receiving", ext.RPCServerOption(ctx))
-	span.SetTag("EventID", msg.Payload)
+	defer span.Finish()
 
+	newCtx := opentracing.ContextWithSpan(context.Background(), span)
+	consumeSubFunction(newCtx, msg)
+
+	span.SetTag("EventID", msg.Payload)
 	<-time.After(500 * time.Microsecond)
-	span.Finish()
 	fmt.Printf("Received a message: %s\n", msg.Payload)
+}
+
+func consumeSubFunction(ctx context.Context, msg Message) {
+	span, _ := opentracing.StartSpanFromContext(ctx, "consume sub function")
+	defer span.Finish()
+	<-time.After(200 * time.Microsecond)
 }
 
 func producer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
