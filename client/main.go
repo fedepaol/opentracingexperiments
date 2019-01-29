@@ -20,6 +20,7 @@ import (
 	config "github.com/uber/jaeger-client-go/config"
 )
 
+// Message represent a message to be sent on Nats Streaming
 type Message struct {
 	Carrier opentracing.TextMapCarrier `json:"carrier"`
 	Payload string                     `json:"message"`
@@ -56,14 +57,14 @@ func consume(tracer opentracing.Tracer, msg Message) {
 	consumeSubFunction(newCtx, msg)
 
 	span.SetTag("EventID", msg.Payload)
-	<-time.After(500 * time.Microsecond)
+	time.Sleep(500 * time.Microsecond)
 	fmt.Printf("Received a message: %s\n", msg.Payload)
 }
 
 func consumeSubFunction(ctx context.Context, msg Message) {
 	span, _ := opentracing.StartSpanFromContext(ctx, "consume sub function")
 	defer span.Finish()
-	<-time.After(200 * time.Microsecond)
+	time.Sleep(200 * time.Microsecond)
 }
 
 func producer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Signal) {
