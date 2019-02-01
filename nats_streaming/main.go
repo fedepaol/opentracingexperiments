@@ -17,7 +17,7 @@ import (
 	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
 	jaeger "github.com/uber/jaeger-client-go"
-	config "github.com/uber/jaeger-client-go/config"
+	"github.com/uber/jaeger-client-go/config"
 )
 
 // Message represent a message to be sent on Nats Streaming
@@ -79,6 +79,9 @@ func producer(tracer opentracing.Tracer, sc stan.Conn, signalChan <-chan os.Sign
 			case <-ticker.C:
 				produce(tracer, sc, count)
 				count++
+				if count == 5 {
+					return
+				}
 			case <-signalChan:
 				wg.Done()
 				return
