@@ -22,7 +22,7 @@ type Message struct {
 }
 
 func produce(tracer opentracing.Tracer, URL string, event int) {
-	span := tracer.StartSpan("SendEvent")
+	span := tracer.StartSpan("HttpSend")
 	defer span.Finish()
 
 	span.SetTag("EventID", event)
@@ -44,27 +44,18 @@ func produce(tracer opentracing.Tracer, URL string, event int) {
 }
 
 func producer(tracer opentracing.Tracer, serverURL string) {
-	ticker := time.NewTicker(3 * time.Second)
-
 	count := 0
-	for {
-		select {
-		case <-ticker.C:
-			produce(tracer, serverURL, count)
-			count++
-			if count == 5 {
-				return
-			}
-
-		}
+	for i := 0; i < 5; i++ {
+		produce(tracer, serverURL, count)
+		time.Sleep(3 * time.Second)
 	}
-
 }
 
 func handleRequests(tracer opentracing.Tracer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		wireContext, _ := tracer.Extract(opentracing.TextMap, opentracing.HTTPHeadersCarrier(r.Header))
-		sp := opentracing.StartSpan("Receiver", opentracing.ChildOf(wireContext))
+		sp := opentracing.StartSpan("Receiver", opentracing.FollowsFrom(wireContext))
+		ext.SpanKindRPCClient.Set(sp)
 		defer sp.Finish()
 		fmt.Fprintf(w, "Hi there, I love %s!", r.URL.Path[1:])
 		time.Sleep(2 * time.Second)
@@ -77,7 +68,7 @@ func consumer(tracer opentracing.Tracer) {
 }
 
 func main() {
-	serverUrl := flag.String("server", "", "the url of the endpoint to call")
+	serverURL := flag.String("server", "", "the url of the endpoint to call")
 	isProducer := flag.Bool("producer", false, "tells if the client starts with producer mode")
 
 	flag.Parse()
@@ -85,9 +76,9 @@ func main() {
 	var name string
 	switch {
 	case *isProducer:
-		name = "producer"
+		name = "http_producer"
 	default:
-		name = "consumer"
+		name = "http_consumer"
 	}
 
 	// Setting up Jaeger as tracing collector
@@ -97,7 +88,7 @@ func main() {
 
 	// Produce / consume are blocking until a sigint is received
 	if *isProducer {
-		producer(tracer, *serverUrl)
+		producer(tracer, *serverURL)
 	} else {
 		consumer(tracer)
 	}

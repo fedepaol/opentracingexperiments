@@ -1,21 +1,36 @@
 version: "3"
 
 services:
-  producer:
+  nats_producer:
     build: ./nats_streaming
-    command: /app/wait-for-it.sh nats:4223 -- /app/natsclient -nats nats:4223 -cluster test-cluster -producer
+    command: /app/natsclient -nats nats:4223 -cluster test-cluster -producer
     environment:
       - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
       - nats
       - jaeger
-  consumer:
+  nats_consumer:
     build: ./nats_streaming
-    command: /app/wait-for-it.sh nats:4223 -- /app/natsclient -nats nats:4223 -cluster test-cluster
+    command: /app/natsclient -nats nats:4223 -cluster test-cluster
     environment:
       - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
     depends_on:
-      - producer
+      - nats_producer
+      - jaeger
+  http_client:
+    build: ./http_call
+    command: /app/httpopentracing -producer -server http://http_server:8080
+    environment:
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    depends_on:
+      - jaeger
+      - http_server
+  http_server:
+    build: ./http_call
+    command: /app/httpopentracing
+    environment:
+      - JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    depends_on:
       - jaeger
   nats:
     image: nats-streaming
